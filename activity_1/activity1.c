@@ -1,58 +1,70 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/ipc.h>
-#include <sys/shm.h>
+#include <sys/mman.h>
 #include <fcntl.h>
 #include <semaphore.h>
+#include <time.h>
 
-#define SHM_SIZE 1024
+#define SHM_SIZE sizeof(int)
 
 int main(void)
 {
     pid_t pid;
-    key_t key;
-    int shmid;
-    char *shmaddr;
+    int *shmaddr;
     sem_t *sem1, *sem2;
-
-    // Generate a key for the shared memory segment
-    key = ftok(".", 'a');
-    if (key == -1)
-    {
-        perror("ftok");
-        exit(1);
-    }
+    int shmfd;
 
     // Create the shared memory segment
-    shmid = shmget(key, SHM_SIZE, IPC_CREAT | 0666);
-    if (shmid == -1)
+    shmfd = shm_open("/myshm", O_CREAT | O_RDWR, 0666);
+    if (shmfd == -1)
     {
-        perror("shmget");
+        perror("shm_open");
         exit(1);
     }
 
-    // Attach the shared memory segment to the process's address space
-    shmaddr = shmat(shmid, NULL, 0);
-    if (shmaddr == (char *)-1)
+    // Set the size of the shared memory to 4 bytes
+    if (ftruncate(shmfd, SHM_SIZE) == -1)
     {
-        perror("shmat");
+        perror("ftruncate");
         exit(1);
     }
 
-    // Initialize the shared memory to "hello"
-    sprintf(shmaddr, "hello");
+    // Map the shared memory segment to the process's address space
+    shmaddr = mmap(NULL, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shmfd, 0);
+    if (shmaddr == MAP_FAILED)
+    {
+        perror("mmap");
+        exit(1);
+    }
+
+    // Generate a random number between 1 and 10
+    srand(time(NULL));
+    int random_num = rand() % 10 + 1;
+    *shmaddr = random_num;
+
+    // Initialize the two semaphores
+    if (sem_init(&sem1, 1, 1) == -1)
+    {
+        perror("sem_init");
+        exit(1);
+    }
+
+    if (sem_init(&sem2, 1, 0) == -1)
+    {
+        perror("sem_init");
+        exit(1);
+    }
 
     // Create the two named semaphores
-    sem1 = sem_open("/sem1", O_CREAT, 0666, 1);
+    sem1 = sem_open("/activity1_sem1", O_CREAT, 0666, 1);
     if (sem1 == SEM_FAILED)
     {
         perror("sem_open");
         exit(1);
     }
 
-    sem2 = sem_open("/sem2", O_CREAT, 0666, 0);
+    sem2 = sem_open("/activity2_sem2", O_CREAT, 0666, 0);
     if (sem2 == SEM_FAILED)
     {
         perror("sem_open");
@@ -70,33 +82,44 @@ int main(void)
     if (pid == 0)
     {
         // Child process
-        printf("Child: waiting for sem1...\n");
-        sem_wait(sem1);
-        printf("Child: acquired sem1, reading shared memory...\n");
-        printf("Child: shared memory contains: %s\n", shmaddr);
-        printf("Child: writing 'world' to shared memory...\n");
-        sprintf(shmaddr, "world");
-        printf("Child: releasing sem2...\n");
-        sem_post(sem2);
+        while (*shmaddr > 0)
+        {
+            printf("Child: waiting for sem1...\n");
+            sem_wait(sem1);
+            if (*shmaddr > 0)
+            {
+                printf("Child: acquired sem1, decrementing shared memory...\n");
+                *shmaddr -= 1;
+            }
+            printf("Child: releasing sem2...\n");
+            sem_post(sem2);
+        }
     }
     else
     {
         // Parent process
-        printf("Parent: waiting for sem2...\n");
-        sem_wait(sem2);
-        printf("Parent: acquired sem2, reading shared memory...\n");
-        printf("Parent: shared memory contains: %s\n", shmaddr);
-        printf("Parent: releasing sem1...\n");
-        sem_post(sem1);
+        while (*shmaddr > 0)
+        {
+            printf("Parent: waiting for sem2...\n");
+            sem_wait(sem2);
+            if (*shmaddr > 0)
+            {
+                printf("Parent: acquired sem2, decrementing shared memory...\n");
+                *shmaddr -= 1;
+            }
+            printf("Parent: releasing sem1...\n");
+            sem_post(sem1);
+        }
     }
 
     // Clean up
-    shmdt(shmaddr);
-    shmctl(shmid, IPC_RMID, NULL);
+    munmap(shmaddr, SHM_SIZE);
+    close(shmfd);
+    shm_unlink("/myshm");
     sem_close(sem1);
     sem_close(sem2);
-    sem_unlink("/sem1");
-    sem_unlink("/sem2");
+    sem_unlink("/activity2_sem1");
+    sem_unlink("/activity2_sem2");
 
     return 0;
 }
