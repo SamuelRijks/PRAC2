@@ -43,18 +43,8 @@ int main(void)
     int random_num = rand() % 10 + 1;
     *shmaddr = random_num;
 
-    // Initialize the two semaphores
-    if (sem_init(&sem1, 1, 1) == -1)
-    {
-        perror("sem_init");
-        exit(1);
-    }
-
-    if (sem_init(&sem2, 1, 0) == -1)
-    {
-        perror("sem_init");
-        exit(1);
-    }
+    printf("main: bouncing for %d times.\n", *shmaddr);
+    printf("parent (pid = %d) begins.\n", getpid());
 
     // Create the two named semaphores
     sem1 = sem_open("/activity1_sem1", O_CREAT, 0666, 1);
@@ -75,41 +65,36 @@ int main(void)
     pid = fork();
     if (pid == -1)
     {
-        perror("fork");
+        perror("error forking");
         exit(1);
     }
 
     if (pid == 0)
     {
         // Child process
+        printf("child (pid = %d) begins.\n", getpid());
         while (*shmaddr > 0)
         {
-            printf("Child: waiting for sem1...\n");
+            printf("child (pid = %d) bounce %d.\n", getpid(), *shmaddr - 1);
             sem_wait(sem1);
-            if (*shmaddr > 0)
-            {
-                printf("Child: acquired sem1, decrementing shared memory...\n");
-                *shmaddr -= 1;
-            }
-            printf("Child: releasing sem2...\n");
+            (*shmaddr)--;
             sem_post(sem2);
         }
+        printf("child (pid = %d) ends.\n", getpid());
+        exit(0);
     }
     else
     {
         // Parent process
         while (*shmaddr > 0)
         {
-            printf("Parent: waiting for sem2...\n");
+            printf("parent (pid = %d) bounce %d.\n", getpid(), *shmaddr - 1);
             sem_wait(sem2);
-            if (*shmaddr > 0)
-            {
-                printf("Parent: acquired sem2, decrementing shared memory...\n");
-                *shmaddr -= 1;
-            }
-            printf("Parent: releasing sem1...\n");
+            (*shmaddr)--;
             sem_post(sem1);
         }
+        printf("parent (pid = %d) ends.\n", getpid());
+        exit(0);
     }
 
     // Clean up
@@ -118,8 +103,8 @@ int main(void)
     shm_unlink("/myshm");
     sem_close(sem1);
     sem_close(sem2);
-    sem_unlink("/activity2_sem1");
-    sem_unlink("/activity2_sem2");
+    sem_unlink("/activity1_sem1");
+    sem_unlink("/activity1_sem2");
 
     return 0;
 }
